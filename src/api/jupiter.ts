@@ -42,6 +42,7 @@ export class JupiterClient {
      */
     async getQuote(inputMint: string, outputMint: string, amount: string, slippageBps: number): Promise<any> {
         console.log(`Getting quote for ${amount} ${inputMint} -> ${outputMint}`);
+        console.log(`${this.baseUri}/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=${slippageBps}`)
         const response = await fetch(
             `${this.baseUri}/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=${slippageBps}`
         );
@@ -65,6 +66,16 @@ export class JupiterClient {
             quoteResponse,
             userPublicKey: this.userKeypair.publicKey.toString(),
             wrapAndUnwrapSol,
+            dynamicSlippage: { // This will set an optimized slippage to ensure high success rate
+                maxBps: 500 // Make sure to set a reasonable cap here to prevent MEV
+            },
+            prioritizationFeeLamports: {
+                priorityLevelWithMaxLamports: {
+                    maxLamports: 10000000,
+                    //priorityLevel: "veryHigh" // If you want to land transaction fast, set this to use `veryHigh`. You will pay on average higher priority fee.
+                    priorityLevel: "high"
+                }
+            },
             ...(feeAccount && { feeAccount })
         };
 
@@ -95,7 +106,8 @@ export class JupiterClient {
 
             const txId = await this.connection.sendRawTransaction(transaction.serialize(), {
                 skipPreflight: true,
-                preflightCommitment: 'singleGossip',
+                preflightCommitment: 'processed',
+                maxRetries: 3, // Retry on failure
             });
             console.log('Swap transaction sent:', txId);
 
@@ -124,7 +136,8 @@ export class JupiterClient {
         const startTime = Date.now();
         while (Date.now() - startTime < timeout) {
             const status = await this.connection.getSignatureStatus(txId);
-            if (status && status.value && status.value.confirmationStatus === 'finalized') {
+            const okStatus = ['processed', 'confirmed', 'finalized'];
+            if (status && status.value && okStatus.includes(status.value.confirmationStatus as string)) {
                 return true;
             }
             await new Promise(resolve => setTimeout(resolve, 2000));

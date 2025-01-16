@@ -16,23 +16,20 @@ function loadKeypairFromFile(filePath: string): Keypair {
         const secretKeyArray = JSON.parse(fileContent);
         return Keypair.fromSecretKey(Uint8Array.from(secretKeyArray));
     } catch (error) {
-        console.error(`Errore durante il caricamento della chiave privata da ${filePath}:`, error);
+        console.error(`Error loading private key from ${filePath}:`, error);
         process.exit(1);
     }
 }
 
 // Derive keypair from seed and derivation path
 function deriveKeypairFromSeed(seed: Buffer, derivationPath: string): Keypair {
-    console.log('Derivation path:', derivationPath);
     const derivedSeed = derivePath(derivationPath, seed.toString('hex')).key;
-    console.log('Derived seed:', derivedSeed);
     const keypair = nacl.sign.keyPair.fromSeed(derivedSeed);
     return Keypair.fromSecretKey(new Uint8Array([...keypair.secretKey]));
 }
 
 // Load keypair from mnemonic
 function loadKeypairFromMnemonic(mnemonic: string, derivationPath: string = "m/44'/501'/0'/0'"): Keypair {
-    console.log('Mnemonic:', mnemonic);
     const seed = bip39.mnemonicToSeedSync(mnemonic);
     return deriveKeypairFromSeed(seed, derivationPath);
 }
@@ -54,7 +51,7 @@ export function loadKeypair(): Keypair {
     } else if (fs.existsSync(USER_KEYPAIR_PATH)) {
         return getUserKeypair();
     } else {
-        console.error('Private key file or mnemonic not found');
+        console.error('Private key file or mnemonic not found.');
         console.error('Please set SOLANA_MNEMONIC environment variable or create a private key file at', USER_KEYPAIR_PATH);
         process.exit(1);
     }

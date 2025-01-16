@@ -1,5 +1,5 @@
 import { JupiterClient } from '../api/jupiter';
-import { SOL_MINT_ADDRESS, MBC_MINT_ADDRESS, USDC_MINT_ADDRESS } from '../constants/constants';
+import { SOL_MINT_ADDRESS, PECA_MINT_ADDRESS, USDC_MINT_ADDRESS } from '../constants/constants';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import Decimal from 'decimal.js';
 import { fromNumberToLamports } from '../utils/convert';
@@ -23,11 +23,11 @@ export class MarketMaker {
      */
     constructor() {
         // Read decimals from the token mint addresses
-        this.mcbToken = { address: MBC_MINT_ADDRESS, symbol: 'MBC', decimals: 9 };
+        this.mcbToken = { address: PECA_MINT_ADDRESS, symbol: 'PECA', decimals: 6 };
         this.solToken = { address: SOL_MINT_ADDRESS, symbol: 'SOL', decimals: 9 };
         this.usdcToken = { address: USDC_MINT_ADDRESS, symbol: 'USDC', decimals: 6 };
         this.waitTime = 60000; // 1 minute
-        this.slippageBps = 50; // 0.5%
+        this.slippageBps = 500; // 3%
         this.priceTolerance = 0.02; // 2%
         this.rebalancePercentage = 0.5; // 50%
     }
@@ -59,7 +59,7 @@ export class MarketMaker {
      * @returns {Promise<void>} - Promise object
      * 
      **/
-    async evaluateAndExecuteTrade(jupiterClient: JupiterClient, pair: any, enableTrading: Boolean): Promise<void> {
+    async evaluateAndExecuteTrade_old(jupiterClient: JupiterClient, pair: any, enableTrading: Boolean): Promise<void> {
         const token0Balance = await this.fetchTokenBalance(jupiterClient, pair.token0); // SOL balance
         const token1Balance = await this.fetchTokenBalance(jupiterClient, pair.token1); // MBC balance
 
@@ -90,6 +90,86 @@ export class MarketMaker {
             }
         } else {
             console.log('No trade needed');
+        }
+    }
+
+    /**
+ * Evaluate and execute a forced trade, ignoring "No trade needed" logic.
+ * - If there's any PECA, sell it all for SOL.
+ * - Else if there's any SOL, buy PECA with all of it.
+ * - Always trades the full balance of whichever token is available.
+ */
+    async evaluateAndExecuteTrade(
+        jupiterClient: JupiterClient,
+        pair: any,
+        enableTrading: Boolean
+    ): Promise<void> {
+        let token0Balance = await this.fetchTokenBalance(jupiterClient, pair.token0); // SOL balance
+        token0Balance = token0Balance.sub(new Decimal(0.1)); // Subtract a small amount to avoid rounding errors
+        const token1Balance = await this.fetchTokenBalance(jupiterClient, pair.token1); // PECA balance
+
+        // For clarity in logs:
+        console.log(`Token0 balance (in ${pair.token0.symbol}): ${token0Balance.toString()}`);
+        console.log(`Token1 balance (in ${pair.token1.symbol}): ${token1Balance.toString()}`);
+
+        // ---------------------------------------------
+        // 1) Sell ALL PECA -> SOL if there's PECA
+        // ---------------------------------------------
+        if (token1Balance.gt(0)) {
+            console.log(`Forcing trade: Selling ${token1Balance.toString()} PECA for SOL...`);
+            const lamportsAsString = fromNumberToLamports(
+                token1Balance.toNumber(),
+                pair.token1.decimals
+            ).toString();
+
+            // Get quote & transaction
+            const quote = await jupiterClient.getQuote(
+                pair.token1.address,
+                pair.token0.address,
+                lamportsAsString,
+                this.slippageBps
+            );
+            const swapTransaction = await jupiterClient.getSwapTransaction(quote);
+
+            if (enableTrading) {
+                const txId = await jupiterClient.executeSwap(swapTransaction);
+                console.log(`Swap executed. Transaction ID: ${txId}`);
+            } else {
+                console.log('Trading disabled');
+            }
+        }
+        // ---------------------------------------------
+        // 2) Else if there's SOL, buy PECA with ALL SOL
+        // ---------------------------------------------
+        else if (token0Balance.gt(0)) {
+            console.log(`Forcing trade: Buying PECA with ${token0Balance.toString()} SOL...`);
+            const lamportsAsString = fromNumberToLamports(
+                token0Balance.toNumber(),
+                pair.token0.decimals
+            ).toString();
+
+            // Get quote & transaction
+            const quote = await jupiterClient.getQuote(
+                pair.token0.address,
+                pair.token1.address,
+                lamportsAsString,
+                this.slippageBps
+            );
+
+            const swapTransaction = await jupiterClient.getSwapTransaction(quote);
+
+            if (enableTrading) {
+                const txId = await jupiterClient.executeSwap(swapTransaction);
+                console.log(`Swap executed. Transaction ID: ${txId}`);
+            } else {
+                console.log('Trading disabled');
+            }
+        }
+        // ---------------------------------------------
+        // 3) Otherwise, no tokens to trade
+        // ---------------------------------------------
+        else {
+            console.log('No tokens available to force a trade.');
         }
     }
 
