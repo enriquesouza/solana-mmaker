@@ -26,8 +26,8 @@ export class MarketMaker {
         this.mcbToken = { address: PECA_MINT_ADDRESS, symbol: 'PECA', decimals: 6 };
         this.solToken = { address: SOL_MINT_ADDRESS, symbol: 'SOL', decimals: 9 };
         this.usdcToken = { address: USDC_MINT_ADDRESS, symbol: 'USDC', decimals: 6 };
-        this.waitTime = 60000; // 1 minute
-        this.slippageBps = 500; // 3%
+        this.waitTime = 60000 * 5; // 5 minutes
+        this.slippageBps = 300; // 3%
         this.priceTolerance = 0.02; // 2%
         this.rebalancePercentage = 0.5; // 50%
     }
@@ -105,7 +105,7 @@ export class MarketMaker {
         enableTrading: Boolean
     ): Promise<void> {
         let token0Balance = await this.fetchTokenBalance(jupiterClient, pair.token0); // SOL balance
-        token0Balance = token0Balance.sub(new Decimal(0.1)); // Subtract a small amount to avoid rounding errors
+        token0Balance = token0Balance.sub(new Decimal(0.01)); // Subtract a small amount to avoid rounding errors
         const token1Balance = await this.fetchTokenBalance(jupiterClient, pair.token1); // PECA balance
 
         // For clarity in logs:

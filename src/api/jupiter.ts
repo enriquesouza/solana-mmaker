@@ -42,7 +42,7 @@ export class JupiterClient {
      */
     async getQuote(inputMint: string, outputMint: string, amount: string, slippageBps: number): Promise<any> {
         console.log(`Getting quote for ${amount} ${inputMint} -> ${outputMint}`);
-        console.log(`${this.baseUri}/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=${slippageBps}`)
+        // console.log(`${this.baseUri}/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=${slippageBps}`)
         const response = await fetch(
             `${this.baseUri}/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=${slippageBps}`
         );
@@ -67,7 +67,8 @@ export class JupiterClient {
             userPublicKey: this.userKeypair.publicKey.toString(),
             wrapAndUnwrapSol,
             dynamicSlippage: { // This will set an optimized slippage to ensure high success rate
-                maxBps: 500 // Make sure to set a reasonable cap here to prevent MEV
+                minBps: 50,
+                maxBps: 100 // Make sure to set a reasonable cap here to prevent MEV
             },
             prioritizationFeeLamports: {
                 priorityLevelWithMaxLamports: {
@@ -106,7 +107,7 @@ export class JupiterClient {
 
             const txId = await this.connection.sendRawTransaction(transaction.serialize(), {
                 skipPreflight: true,
-                preflightCommitment: 'processed',
+                preflightCommitment: 'confirmed',
                 maxRetries: 3, // Retry on failure
             });
             console.log('Swap transaction sent:', txId);
