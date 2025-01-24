@@ -68,7 +68,7 @@ export class JupiterClient {
             wrapAndUnwrapSol,
             dynamicSlippage: { // This will set an optimized slippage to ensure high success rate
                 minBps: 50,
-                maxBps: 100 // Make sure to set a reasonable cap here to prevent MEV
+                maxBps: 300 // Make sure to set a reasonable cap here to prevent MEV
             },
             prioritizationFeeLamports: {
                 priorityLevelWithMaxLamports: {
