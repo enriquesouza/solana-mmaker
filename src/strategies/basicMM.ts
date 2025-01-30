@@ -3,260 +3,171 @@ import { SOL_MINT_ADDRESS, PECA_MINT_ADDRESS, USDC_MINT_ADDRESS } from '../const
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import Decimal from 'decimal.js';
 import { fromNumberToLamports } from '../utils/convert';
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey, Keypair } from '@solana/web3.js';
 import { sleep } from '../utils/sleep';
+import { loadKeypairsFromCsv } from '../keypairLoader';
 
 /**
  * Class for market making basic strategy
  */
 export class MarketMaker {
-    mcbToken: { address: string, symbol: string, decimals: number }
-    solToken: { address: string, symbol: string, decimals: number }
-    usdcToken: { address: string, symbol: string, decimals: number }
-    waitTime: number
-    slippageBps: number
-    priceTolerance: number
-    rebalancePercentage: number
+    mcbToken: { address: string; symbol: string; decimals: number };
+    solToken: { address: string; symbol: string; decimals: number };
+    usdcToken: { address: string; symbol: string; decimals: number };
+    waitTime: number;
+    slippageBps: number;
+    priceTolerance: number;
+    rebalancePercentage: number;
+    connection: Connection;
 
     /**
      * Initializes a new instance of the MarketMaker class with default properties.
+     * @param connection Solana connection object
      */
-    constructor() {
-        // Read decimals from the token mint addresses
+    constructor(connection: Connection) {
+        this.connection = connection;
+
+        // Define token metadata
         this.mcbToken = { address: PECA_MINT_ADDRESS, symbol: 'PECA', decimals: 6 };
         this.solToken = { address: SOL_MINT_ADDRESS, symbol: 'SOL', decimals: 9 };
         this.usdcToken = { address: USDC_MINT_ADDRESS, symbol: 'USDC', decimals: 6 };
+
+        // Define market-making parameters
         this.waitTime = 60000 * 5; // 5 minutes
-        this.slippageBps = 300; // 3%
+        this.slippageBps = 50; // 0.3%
         this.priceTolerance = 0.02; // 2%
         this.rebalancePercentage = 0.5; // 50%
     }
 
     /**
      * Run market making strategy
-     * @param {JupiterClient} jupiterClient - JupiterClient object
-     * @param {boolean} enableTrading - Enable trading
-     * @returns {Promise<void>} - Promise object
+     * Loads keypairs and processes them sequentially to avoid rate limits.
+     * @param enableTrading Whether trading is enabled.
+     * @returns Promise<void>
      */
-    async runMM(jupiterClient: JupiterClient, enableTrading: Boolean = false): Promise<void> {
-        const tradePairs = [{ token0: this.solToken, token1: this.mcbToken }];
+    async runMM(enableTrading: boolean = false): Promise<void> {
+        console.log('Loading keypairs...');
+        const keypairs = await loadKeypairsFromCsv('./keypairs.csv');
+
+        if (keypairs.length === 0) {
+            throw new Error('No keypairs found. Please check the keypairs.csv file.');
+        }
+
+        console.log(`Starting market makers for ${keypairs.length} keypairs...`);
 
         while (true) {
-            for (const pair of tradePairs) {
-                await this.evaluateAndExecuteTrade(jupiterClient, pair, enableTrading);
+            for (const [index, keypair] of keypairs.entries()) {
+                try {
+                    const jupiterClient = new JupiterClient(this.connection, keypair);
+                    console.log(`Processing MarketMaker ${index + 1} for account: ${keypair.publicKey.toBase58()}`);
+
+                    const tradePairs = [{ token0: this.solToken, token1: this.mcbToken }];
+
+                    for (const pair of tradePairs) {
+                        await this.evaluateAndExecuteTrade(jupiterClient, pair, enableTrading);
+                    }
+
+                    // Sleep after processing each keypair to avoid rate limits
+                    console.log(`Waiting 2 seconds before processing the next maker...`);
+                    await sleep(2000); // 2 seconds between keypairs
+                } catch (err) {
+                    console.error(`Error with MarketMaker ${index + 1}:`, err);
+                }
             }
 
-            console.log(`Waiting for ${this.waitTime / 1000} seconds...`);
-            await sleep(this.waitTime);
+            // Global wait time before repeating the loop
+            // console.log(`Waiting ${this.waitTime / 1000} seconds before the next round...`);
+            // await sleep(this.waitTime);
         }
     }
 
     /**
-     * Evaluate and execute trade
-     * @param {JupiterClient} jupiterClient - JupiterClient object
-     * @param {any} pair - Pair object
-     * @param {boolean} enableTrading - Enable trading
-     * @returns {Promise<void>} - Promise object
-     * 
-     **/
-    async evaluateAndExecuteTrade_old(jupiterClient: JupiterClient, pair: any, enableTrading: Boolean): Promise<void> {
-        const token0Balance = await this.fetchTokenBalance(jupiterClient, pair.token0); // SOL balance
-        const token1Balance = await this.fetchTokenBalance(jupiterClient, pair.token1); // MBC balance
-
-        // Log current token balances
-        console.log(`Token0 balance (in ${pair.token0.symbol}): ${token0Balance.toString()}`);
-        console.log(`Token1 balance (in ${pair.token1.symbol}): ${token1Balance.toString()}`);
-
-        // Get USD value for both tokens
-        const tradeNecessity = await this.determineTradeNecessity(jupiterClient, pair, token0Balance, token1Balance);
-        const { tradeNeeded, solAmountToTrade, mbcAmountToTrade } = tradeNecessity!;
-
-        if (tradeNeeded) {
-            console.log('Trade needed');
-            if (solAmountToTrade.gt(0)) {
-                console.log(`Trading ${solAmountToTrade.toString()} SOL for MBC...`);
-                const lamportsAsString = fromNumberToLamports(solAmountToTrade.toNumber(), pair.token0.decimals).toString();
-                const quote = await jupiterClient.getQuote(pair.token0.address, pair.token1.address, lamportsAsString, this.slippageBps);
-                const swapTransaction = await jupiterClient.getSwapTransaction(quote);
-                if (enableTrading) await jupiterClient.executeSwap(swapTransaction);
-                else console.log('Trading disabled');
-            } else if (mbcAmountToTrade.gt(0)) {
-                console.log(`Trading ${mbcAmountToTrade.toString()} MBC for SOL...`);
-                const lamportsAsString = fromNumberToLamports(mbcAmountToTrade.toNumber(), pair.token1.decimals).toString();
-                const quote = await jupiterClient.getQuote(pair.token1.address, pair.token0.address, lamportsAsString, this.slippageBps);
-                const swapTransaction = await jupiterClient.getSwapTransaction(quote);
-                if (enableTrading) await jupiterClient.executeSwap(swapTransaction);
-                else console.log('Trading disabled');
-            }
-        } else {
-            console.log('No trade needed');
-        }
-    }
-
-    /**
- * Evaluate and execute a forced trade, ignoring "No trade needed" logic.
- * - If there's any PECA, sell it all for SOL.
- * - Else if there's any SOL, buy PECA with all of it.
- * - Always trades the full balance of whichever token is available.
- */
+     * Evaluate and execute a forced trade.
+     * @param jupiterClient JupiterClient object.
+     * @param pair Trade pair object.
+     * @param enableTrading Whether trading is enabled.
+     */
     async evaluateAndExecuteTrade(
         jupiterClient: JupiterClient,
-        pair: any,
-        enableTrading: Boolean
+        pair: { token0: any; token1: any },
+        enableTrading: boolean
     ): Promise<void> {
         let token0Balance = await this.fetchTokenBalance(jupiterClient, pair.token0); // SOL balance
+
+        console.log(`Previous token0 balance (${pair.token0.symbol}): ${token0Balance}`);
+
         token0Balance = token0Balance.sub(new Decimal(0.01)); // Subtract a small amount to avoid rounding errors
         const token1Balance = await this.fetchTokenBalance(jupiterClient, pair.token1); // PECA balance
 
-        // For clarity in logs:
-        console.log(`Token0 balance (in ${pair.token0.symbol}): ${token0Balance.toString()}`);
-        console.log(`Token1 balance (in ${pair.token1.symbol}): ${token1Balance.toString()}`);
+        console.log(`Token0 balance (${pair.token0.symbol}): ${token0Balance}`);
+        console.log(`Token1 balance (${pair.token1.symbol}): ${token1Balance}`);
 
         // ---------------------------------------------
         // 1) Sell ALL PECA -> SOL if there's PECA
         // ---------------------------------------------
         if (token1Balance.gt(0)) {
-            console.log(`Forcing trade: Selling ${token1Balance.toString()} PECA for SOL...`);
+            console.log(`Forcing trade: Selling ${token1Balance} PECA for SOL...`);
             const lamportsAsString = fromNumberToLamports(
                 token1Balance.toNumber(),
                 pair.token1.decimals
             ).toString();
 
-            // Get quote & transaction
-            const quote = await jupiterClient.getQuote(
-                pair.token1.address,
-                pair.token0.address,
-                lamportsAsString,
-                this.slippageBps
-            );
+            const quote = await jupiterClient.getQuote(pair.token1.address, pair.token0.address, lamportsAsString, this.slippageBps);
             const swapTransaction = await jupiterClient.getSwapTransaction(quote);
 
             if (enableTrading) {
                 const txId = await jupiterClient.executeSwap(swapTransaction);
                 console.log(`Swap executed. Transaction ID: ${txId}`);
             } else {
-                console.log('Trading disabled');
+                console.log('Trading disabled.');
             }
         }
         // ---------------------------------------------
         // 2) Else if there's SOL, buy PECA with ALL SOL
         // ---------------------------------------------
         else if (token0Balance.gt(0)) {
-            console.log(`Forcing trade: Buying PECA with ${token0Balance.toString()} SOL...`);
+            console.log(`Forcing trade: Buying PECA with ${token0Balance} SOL...`);
             const lamportsAsString = fromNumberToLamports(
                 token0Balance.toNumber(),
                 pair.token0.decimals
             ).toString();
 
-            // Get quote & transaction
-            const quote = await jupiterClient.getQuote(
-                pair.token0.address,
-                pair.token1.address,
-                lamportsAsString,
-                this.slippageBps
-            );
-
+            const quote = await jupiterClient.getQuote(pair.token0.address, pair.token1.address, lamportsAsString, this.slippageBps);
             const swapTransaction = await jupiterClient.getSwapTransaction(quote);
 
             if (enableTrading) {
                 const txId = await jupiterClient.executeSwap(swapTransaction);
                 console.log(`Swap executed. Transaction ID: ${txId}`);
             } else {
-                console.log('Trading disabled');
+                console.log('Trading disabled.');
             }
         }
         // ---------------------------------------------
         // 3) Otherwise, no tokens to trade
         // ---------------------------------------------
         else {
-            console.log('No tokens available to force a trade.');
+            console.log('No tokens available to trade.');
         }
     }
 
-    /**
-     * Determines the necessity of a trade based on the current balance of two tokens and their USD values.
-     * The goal is to maintain a 50/50 ratio of the total USD value of each token.
-     * 
-     * @param jupiterClient An instance of JupiterClient used to fetch USD values of tokens.
-     * @param pair An object representing the token pair to be evaluated, containing `token0` and `token1` properties.
-     * @param token0Balance The current balance of `token0`.
-     * @param token1Balance The current balance of `token1`.
-     * @returns A promise that resolves to an object indicating whether a trade is needed and the amount of each token to trade.
-     */
-    async determineTradeNecessity(jupiterClient: JupiterClient, pair: any, token0Balance: Decimal, token1Balance: Decimal) {
-        const token0Price = await this.getUSDValue(jupiterClient, pair.token0);
-        const token1Price = await this.getUSDValue(jupiterClient, pair.token1);
-
-        const token0Value = token0Balance.mul(token0Price);
-        const token1Value = token1Balance.mul(token1Price);
-
-        const totalPortfolioValue = token0Value.add(token1Value);
-        const targetValuePerToken = totalPortfolioValue.div(new Decimal(2));
-
-
-        let solAmountToTrade = new Decimal(0);
-        let mbcAmountToTrade = new Decimal(0);
-        let tradeNeeded = false;
-
-        console.log(`${pair.token0.symbol} value: ${token0Value.toString()}`);
-        console.log(`${pair.token1.symbol} value: ${token1Value.toString()}`);
-
-        if (token0Value.gt(targetValuePerToken)) {
-            // If token0's value exceeds the maximum tolerated value, trade some of it for token1
-            const valueDiff = token0Value.sub(targetValuePerToken);
-            solAmountToTrade = valueDiff.div(token0Price);
-            tradeNeeded = true;
-        } else if (token1Value.gt(targetValuePerToken)) {
-            // If token0's value is below the minimum tolerated value, trade some token1 for it
-            const valueDiff = token1Value.sub(targetValuePerToken);
-            mbcAmountToTrade = valueDiff.div(token1Price);
-            tradeNeeded = true;
-        }
-
-        const minimumTradeAmount = new Decimal(0.01);
-        if (solAmountToTrade.lt(minimumTradeAmount) && mbcAmountToTrade.lt(minimumTradeAmount)) {
-            tradeNeeded = false;
-        }
-
-        return { tradeNeeded, solAmountToTrade, mbcAmountToTrade };
-    }
-
-    /**
-     * Fetch token balance
-     * @param {JupiterClient} jupiterClient - JupiterClient object
-     * @param {any} token - Token object
-     * @returns {Promise<Decimal>} - Token balance
-     */
-    async fetchTokenBalance(jupiterClient: JupiterClient, token: { address: string; symbol: string; decimals: number; }): Promise<Decimal> {
+    async fetchTokenBalance(jupiterClient: JupiterClient, token: any): Promise<Decimal> {
         const connection = jupiterClient.getConnection();
         const publicKey = jupiterClient.getUserKeypair().publicKey;
 
-        let balance = token.address === SOL_MINT_ADDRESS
-            ? await connection.getBalance(publicKey)
-            : await this.getSPLTokenBalance(connection, publicKey, new PublicKey(token.address));
+        let balance =
+            token.address === SOL_MINT_ADDRESS
+                ? await connection.getBalance(publicKey)
+                : await this.getSPLTokenBalance(connection, publicKey, new PublicKey(token.address));
 
         return new Decimal(balance).div(new Decimal(10).pow(token.decimals));
     }
 
-    /**
-     * Get SPL token balance.
-     * @param connection Solana connection object.
-     * @param walletAddress Wallet public key.
-     * @param tokenMintAddress Token mint public key.
-     * @returns Token balance as a Decimal.
-     */
     async getSPLTokenBalance(connection: Connection, walletAddress: PublicKey, tokenMintAddress: PublicKey): Promise<Decimal> {
         const accounts = await connection.getParsedTokenAccountsByOwner(walletAddress, { programId: TOKEN_PROGRAM_ID });
         const accountInfo = accounts.value.find((account: any) => account.account.data.parsed.info.mint === tokenMintAddress.toBase58());
         return accountInfo ? new Decimal(accountInfo.account.data.parsed.info.tokenAmount.amount) : new Decimal(0);
     }
 
-    /**
-     * Get USD value of a token.
-     * @param jupiterClient JupiterClient object.
-     * @param token Token object.
-     * @returns USD value of the token as a Decimal.
-     */
     async getUSDValue(jupiterClient: JupiterClient, token: any): Promise<Decimal> {
         const quote = await jupiterClient.getQuote(token.address, this.usdcToken.address, fromNumberToLamports(1, token.decimals).toString(), this.slippageBps);
         return new Decimal(quote.outAmount).div(new Decimal(10).pow(this.usdcToken.decimals));

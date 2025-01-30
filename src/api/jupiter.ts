@@ -1,6 +1,10 @@
 import { Connection, Keypair, VersionedTransaction } from '@solana/web3.js';
 import fetch from 'cross-fetch';
 
+import { PublicKey, Transaction, SystemProgram } from '@solana/web3.js';
+import { Token, TOKEN_PROGRAM_ID } from '@solana/spl-token';
+
+
 /**
  * Class for interacting with the Jupiter API to perform token swaps on the Solana blockchain.
  */
@@ -42,7 +46,7 @@ export class JupiterClient {
      */
     async getQuote(inputMint: string, outputMint: string, amount: string, slippageBps: number): Promise<any> {
         console.log(`Getting quote for ${amount} ${inputMint} -> ${outputMint}`);
-        // console.log(`${this.baseUri}/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=${slippageBps}`)
+        console.log(`${this.baseUri}/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=${slippageBps}`)
         const response = await fetch(
             `${this.baseUri}/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=${slippageBps}`
         );
@@ -68,7 +72,7 @@ export class JupiterClient {
             wrapAndUnwrapSol,
             dynamicSlippage: { // This will set an optimized slippage to ensure high success rate
                 minBps: 50,
-                maxBps: 300 // Make sure to set a reasonable cap here to prevent MEV
+                maxBps: 50 // Make sure to set a reasonable cap here to prevent MEV
             },
             prioritizationFeeLamports: {
                 priorityLevelWithMaxLamports: {
@@ -93,6 +97,7 @@ export class JupiterClient {
         const { swapTransaction } = await response.json();
         return swapTransaction;
     }
+
 
     /**
      * Executes a swap transaction on the Solana blockchain.
